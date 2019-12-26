@@ -204,6 +204,7 @@ int main(int argc, char **argv) {
         recvline(cli.sockfd, rlen, srvBuf, srvRes);
         close(cli.sockfd);
         cli.name.clear();
+        cli.stage = 0;
         goto Connect;
     }else{
         cout << "Invalid Options" << endl;
