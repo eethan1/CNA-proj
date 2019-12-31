@@ -18,10 +18,13 @@
 
 - Reusable bind: If server crash, the bind port will be occupied for a while. This feature makes server reuse same port to listen possible.
 
+- Good coding style: Split ugly code into magic.h.
+
 ## Requirement
 
 - Compiling enrionment's OS is Arch Linux and kernel is 5.4.2-arch1-1. 
 - It can also compile on department's workstation.
+- It use standard C++14.
 
 ## Compile
 

@@ -80,19 +80,28 @@ private:
         qlock.unlock();
         return task;
     };
+    void peeknotify() {
+        qlock.lock();
+        if(!tasks.empty()) {
+            cv.notify_all();
+        };
+        qlock.unlock();
+        return;
+    }
     int worker(int id) {
         while (true) {
             assigned[id] = getTask();
             if (assigned[id] != nullptr) {
-                mout << "Thread " << id << " process " << inet_ntoa(assigned[id]->sock.sin_addr) << endl;
-                mout << "fd: " << assigned[id]->fd << endl;
+                mout << "Thread " << id << " process " << inet_ntoa(assigned[id]->sock.sin_addr) << "\nfd: " << assigned[id]->fd << endl;
                 f(assigned[id]->fd, &(assigned[id]->sock), srvptr);
+                peeknotify();
                 assigned[id] = nullptr;
+            }else{
+                unique_lock<mutex> mLock(cvlock);
+                cv.wait(mLock);
             }
-            unique_lock<mutex> mLock(cvlock);
-
-            cv.wait(mLock);
         }
+        mout << "Worker " << id << " dead" << endl;
         return 0;
     };
     func f;
@@ -147,7 +156,7 @@ int main(int argc, char **argv) {
     int newfd = -1;
     struct sockaddr_in newSock;
     socklen_t newSockl = sizeof(newSock);
-    Master master(&slave, 3, &srv);
+    Master master(&slave, 2, &srv);
     master.run();
     while(newfd = accept(srv.sockfd, (struct sockaddr*) &newSock, &newSockl)){
         if (newfd < 0) {
