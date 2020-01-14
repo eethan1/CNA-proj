@@ -32,6 +32,21 @@ cliInfo::cliInfo (int i, int sfd,sockaddr_in so) :cliInfo(){
 cliInfo srvInfo::getCli(int i){
     return cliInfos[i];
 }
+bool srvInfo::isOnline(string& name){
+    for(int i=0;i<registerNum;++i) {
+        if(cliInfos[i].online) return true;
+    }
+    return false;
+};
+cliInfo srvInfo::getInfo(string& name){
+    for(int i=0;i<registerNum;++i) {
+        if(cliInfos[i].name==name)
+        return cliInfos[i];
+    }
+    cout << "Error getInfo " << endl;
+    exit(-1);
+};
+
 cliInfo::cliInfo(const cliInfo& cli):ip(cli.ip),openPort(cli.openPort),name(cli.name){
     index = cli.index;
      balance = cli.balance;
@@ -122,4 +137,132 @@ bool isNumber(const string& s) {
     return true;
 }
 
+string srvInfo::checker(string& spayer, string& spayee, unsigned char* encMsg) {
+    string spubkey,payRes;
+    struct sockaddr_in sock;
+    int payfd;
+    ssize_t rlen;
+    char payBuf[1024];
+    sock.sin_family = AF_INET;
+
+    RSA* publicRSA;
+    BIO* bo;
+   
+
+    BIO_free(bo);
+    RSA_free(publicRSA);
+
+    if(isOnline(spayer) && isOnline(spayee)) {
+        cliInfo payer = getInfo(spayer), payee = getInfo(spayee);
+        inet_pton(AF_INET, payee.ip.c_str() , &(sock.sin_addr)); 
+        sock.sin_port = htons(atoi(payee.openPort.c_str()));  
+        if ((payfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+            perror("create socket");
+            exit(1);
+        }
+        if(!make_connect(payfd, sock)) {
+            mout << "connect to payee fail" << endl;
+            exit(-1);
+        }
+        ssend(payfd,"key?");
+        mout << "Try get key: " << endl;
+        char buf[0x200];
+        recv(payfd, buf, 272,0);
+        spubkey.copy(buf, 272);
+        cout << spubkey;
+
+        // for(int i=0;i<6;++i) {
+        //     recvline(payfd, rlen, payBuf, payRes);
+        //     mout << "line " << i << ": " << payRes << endl;
+        //     spubkey += payRes + "\n";
+        // }
+        close(payfd);
+        mout << "Publickey from payee: " << payee.name << ": \n" << spubkey << "##"<<endl; 
+        BIO_write(bo, spubkey.c_str(),spubkey.length());
+        PEM_read_bio_RSA_PUBKEY(bo, &publicRSA, 0, 0 );
+        int rsa_len = RSA_size(publicRSA);
+        const unsigned char * enc = (const unsigned char *)encMsg;
+        unsigned char * dec = (unsigned char *)malloc(0x100);
+    
+        if(RSA_private_decrypt(rsa_len, (unsigned char*) encMsg,dec,publicRSA, RSA_PKCS1_PADDING) < 0){
+            mout << "payee dec error" << endl;
+            return "";
+        }
+        BIO_free(bo);
+        RSA_free(publicRSA);
+        spubkey.clear();
+        inet_pton(AF_INET, payer.ip.c_str() , &(sock.sin_addr)); 
+        sock.sin_port = htons(atoi(payer.openPort.c_str()));  
+        if ((payfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+            perror("create socket");
+            exit(1);
+        }
+        if(!make_connect(payfd, sock)) {
+            mout << "connect to payee fail" << endl;
+            exit(-1);
+        }
+        ssend(payfd,"key?");
+        recv(payfd, buf, 272,0);
+        spubkey.copy(buf, 272);
+        cout << spubkey;
+        close(payfd);
+        mout << "Publickey from payer: " << payer.name << ": \n" << spubkey << "##"<<endl; 
+        BIO_write(bo, spubkey.c_str(),spubkey.length());
+        PEM_read_bio_RSA_PUBKEY(bo, &publicRSA, 0, 0 );
+        const unsigned char * enc2 = (const unsigned char *)dec;
+        unsigned char * dec2 = (unsigned char *)malloc(0x100);
+
+        if(RSA_private_decrypt(rsa_len, enc2,dec2,publicRSA, RSA_PKCS1_PADDING) < 0){
+            mout << "payer dec error" << endl;
+            return "";
+        }
+        BIO_free(bo);
+        RSA_free(publicRSA);
+
+        string plain((char*)dec2); 
+        int deli1 = plain.find("#"),
+            deli2 = plain.find("#",deli1+1);
+            
+        if( deli1 != string::npos &&
+            deli2 != string::npos && 
+            plain.substr(0,deli1) == payer.name && 
+            plain.substr(deli2+1) == payee.name && 
+            isNumber(plain.substr(deli1+1,deli2-deli1-1))) {
+            return plain.substr(deli1+1,deli2-deli1-1);
+        }
+    }
+    return "";
+    
+}
+bool srvInfo::trailer(string& spayer, string& smoney, string& spayee) {
+    cliInfo payer = getInfo(spayer), payee = getInfo(spayee);
+    int money = atoi(smoney.c_str());
+    if(payer.balance - money >= 0) {
+        payer.balance -= money;
+        payee.balance += money;
+        if(setCli(payer.index,payer) && setCli(payee.index,payee))
+            return true;
+    }
+    return false;
+}
+bool make_connect(int sockfd, struct sockaddr_in& sock){
+    if(connect(sockfd, (struct sockaddr*) &(sock), sizeof(sock)) <0) {
+        switch(errno)
+        {
+            case 111:
+                cerr << "Connection Refused" << endl;
+                break;
+            case 115:
+            case 110:
+                cerr << "Timeoute" << endl;
+                break;
+            default:
+                perror("New");
+                cerr << errno << endl;
+                break;
+        }
+        return false;
+    }
+    return true;
+}
 Mout mout;

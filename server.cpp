@@ -153,10 +153,11 @@ int main(int argc, char **argv) {
         perror("listen");
         exit(1);
     }
+    OpenSSL_add_all_algorithms();
     int newfd = -1;
     struct sockaddr_in newSock;
     socklen_t newSockl = sizeof(newSock);
-    Master master(&slave, 2, &srv);
+    Master master(&slave, 10, &srv);
     master.run();
     while(newfd = accept(srv.sockfd, (struct sockaddr*) &newSock, &newSockl)){
         if (newfd < 0) {
@@ -189,9 +190,9 @@ void slave(int newfd, struct sockaddr_in* newSockptr, srvInfo* srvptr) {
     ssend(curCli.sockfd,"Accepted\n");
     GetCommand:
     mout << "Regist: " << srv.registerNum << endl;
-    flag = 1120;
+    flag = NEXT_COMMAND;
     if(recvline(curCli.sockfd, inlen, cliBuf, cliIn) == false) {
-        flag = 7122;
+        flag = JIZZ;
         goto Exit;
     }
     mout << curCli.sock.sin_addr.s_addr << " Input: " << cliIn << "#Len" << cliIn.length() << endl;
@@ -214,7 +215,7 @@ void slave(int newfd, struct sockaddr_in* newSockptr, srvInfo* srvptr) {
             auto cli = srv.getCli(i);
             if(cli.name == tmpName) {
                 mout << "Depulicate Username: " << tmpName << endl;
-                flag = 210;
+                flag = DUPLICATE_NAME;
                 break;
             }
         }
@@ -224,10 +225,46 @@ void slave(int newfd, struct sockaddr_in* newSockptr, srvInfo* srvptr) {
             newCli.name = tmpName;
             srv.regist(newCli);
         }
+    }else if(cliIn.find("Trade#")==0){
+        int deli1 = 5,
+            deli2 = cliIn.find("#",deli1+1),
+            deli3 = cliIn.find("#",deli2+1);
+        if(deli1 == string::npos||deli2 == string::npos|| deli3 == string::npos) {
+            mout << "UNKNOW" <<endl;
+            flag = UNKNOWN_COMMAND;
+        }else{
+            string  payer = cliIn.substr(deli1+1,deli2-deli1-1),
+                payee = cliIn.substr(deli2+1,deli3-deli2-1),
+                smoney;
+            int  enclen = atoi(cliIn.substr(deli3+1).c_str());
+            unsigned char encMsg[0x100];
+            mout << "Wait Recv enc with len: " << enclen << endl;
+            recv(curCli.sockfd,encMsg,enclen,0);
+            mout << "Try Auth Trade: " << payer << "->" << payee << endl;
+            if((smoney = srv.checker(payer,payee,encMsg)) != ""){
+                mout << "Decrypt Success: " << payer << "->" << payee << "," << smoney << endl;
+                if(deli1 == string::npos || deli2 == string::npos){
+                    mout << "trade Format error" << endl;
+                    flag = TRADE_FORMAT_ERROR;
+                }else if(srv.trailer(payer,smoney,payee)) {
+                    mout << "Trade commited: " << payer << "->" << payee << "," << smoney << endl; 
+                    flag = 200;
+                }else{
+                    mout << "money not enough" << endl;
+                    flag = NOT_ENOUGH; 
+                }
+            }else if(smoney == ""){
+                mout << "DeCRYPT_FAIL" << endl;
+                flag = DECRYPT_FAIL;
+            }
+        }
+    }else if(cliIn.compare("Exit")==0) {  
+        flag = JIZZ;
+        goto Exit;
     }else if((pos=cliIn.find("#")) > 0 && pos != string::npos){
         string tmpName = cliIn.substr(0,pos);
         string port = cliIn.substr(pos+1).c_str();
-        flag = 220;
+        flag = AUTH_FAIL_;
         for(int i=0;i<srv.registerNum;++i) {
             auto cli = srv.getCli(i);
             if(cli.name == tmpName) {
@@ -240,19 +277,16 @@ void slave(int newfd, struct sockaddr_in* newSockptr, srvInfo* srvptr) {
                 cli.ip = curCli.ip;
                 srv.setCli(i,cli);
                 curCli = cli;
-                flag = 90;
+                flag = REDIRECT_GETLIST;
                 mout << curCli.name << " login from " << curCli.sock.sin_addr.s_addr << endl;
                 break;
             }
         }
-        if(flag == 220) {
+        if(flag == AUTH_FAIL_) {
             mout << curCli.name << " login failed from" << curCli.sock.sin_addr.s_addr << endl;
         }
-    }else if(cliIn.compare("Exit")==0) {  
-        flag = 7122;
-        goto Exit;
-    }else {
-        flag = 210;
+    }else{
+        flag = UNKNOWN_COMMAND;
     }
     goto ProcessFlag;
 
@@ -261,37 +295,53 @@ void slave(int newfd, struct sockaddr_in* newSockptr, srvInfo* srvptr) {
     switch(flag){
         case 100:
             ssend(curCli.sockfd,"100 OK\n");
-            flag = 1120;
+            flag = NEXT_COMMAND;
             break;
-        case 90:
-            flag = 1204;
+        case REDIRECT_GETLIST:
+            flag = GET_LIST;
             break;
-        case 210:
-            ssend(curCli.sockfd,"210 FAIL\n");
-            flag = 1120;
+        case DUPLICATE_NAME:
+            ssend(curCli.sockfd,"210 DUPLICATE_NAME\n");
+            flag = NEXT_COMMAND;
             break;
-        case 220:
+        case AUTH_FAIL_:
             ssend(curCli.sockfd,"220 AUTH_FAIL\n");
-            flag = 1120;
+            flag = NEXT_COMMAND;
             break;
-        case 300:
+        case UNKNOWN_COMMAND:
+            ssend(curCli.sockfd,"240 UNKNOWN\n");
+            flag = NEXT_COMMAND;
+            break;
+        case NOT_ENOUGH:
+            ssend(curCli.sockfd, "501 nOT_ENOUGH"); 
+            flag = NEXT_COMMAND;
+            break;
+        case DECRYPT_FAIL:
+            ssend(curCli.sockfd, "502 DeCRYPT_FAIL"); 
+            flag = NEXT_COMMAND;
+            break;
+        case TRADE_FORMAT_ERROR:
+            ssend(curCli.sockfd, "503 TRaDE_FORMAT_ERROR"); 
+            flag = NEXT_COMMAND;
+            break;
+        case BYE:
             ssend(curCli.sockfd,"Bye\n");
             close(curCli.sockfd);
             return;
             break;
-        case 1204:
+        case GET_LIST:
             // send list
             mout << "User: " << curCli.name <<  "Getlist" << endl;
             srvRes = srv.getList(curCli);
             ssend(curCli.sockfd,srvRes);
-            flag = 1120;
+            flag = NEXT_COMMAND;
             break;
-        case 7122:
+        case JIZZ:
             // mout << "Something go wrong" << endl;
              close(curCli.sockfd);
             return;
             break;
-        case 1120:
+        case NEXT_COMMAND:
             // pass
             goto GetCommand;
             break;
@@ -301,9 +351,9 @@ void slave(int newfd, struct sockaddr_in* newSockptr, srvInfo* srvptr) {
 
     Logined:
     if(cliIn.compare("List")==0){
-        flag = 1204;    
+        flag = GET_LIST;    
     }else if(cliIn.compare("Exit")==0){
-        flag = 300;
+        flag = BYE;
         Exit:
         for(int i=0;i<srv.registerNum;++i) {
             auto cli = srv.getCli(i);
@@ -316,7 +366,7 @@ void slave(int newfd, struct sockaddr_in* newSockptr, srvInfo* srvptr) {
         }
         mout << "User: " << curCli.name <<  " Exit" << endl;
     }else {
-        flag = 210;
+        flag = UNKNOWN_COMMAND;
     }
     goto ProcessFlag;
 }
